@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+ultralytics
+supabase
+pytesseract
+python-dotenv
+opencv-python
+numpy
+pydantic-settings
+email-validator
