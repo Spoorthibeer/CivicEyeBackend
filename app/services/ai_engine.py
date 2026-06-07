@@ -33,7 +33,20 @@ class AIEngine:
 
     @staticmethod
     def process_image(image_path: str):
-        img = cv2.imread(image_path)
+        try:
+            from PIL import Image, ImageOps
+            import numpy as np
+            
+            # 1. Open with PIL and automatically fix EXIF rotation
+            pil_img = Image.open(image_path)
+            pil_img = ImageOps.exif_transpose(pil_img)
+            
+            # 2. Convert to OpenCV format (RGB to BGR)
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            print(f"Error loading image {image_path}: {e}")
+            return "Clear", "NOT_FOUND"
+
         if img is None:
             return "Clear", "NOT_FOUND"
 
@@ -43,8 +56,9 @@ class AIEngine:
         # ==========================================
         # 1. Standard YOLOv8 for Triple Riding
         # ==========================================
-        # Standard model accurately separates 'person' (0) and 'motorcycle' (3)
-        results_std = model_std(image_path, conf=0.25)
+        # Pass the EXIF-corrected numpy array 'img' instead of 'image_path'
+        results_std = model_std(img, conf=0.25)
+
         persons = []
         motorcycles = []
         
@@ -71,7 +85,7 @@ class AIEngine:
         # ==========================================
         # 2. Custom Model for No Helmet & OCR
         # ==========================================
-        results_custom = model_custom(image_path, conf=0.10, iou=0.3)
+        results_custom = model_custom(img, conf=0.10, iou=0.3)
 
         for r in results_custom:
             classes = r.boxes.cls.tolist()
