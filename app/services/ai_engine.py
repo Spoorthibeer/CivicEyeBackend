@@ -3,8 +3,11 @@ import pytesseract
 from ultralytics import YOLO
 import os
 
-# HARDCODED PATH: Direct link to the executable
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Auto-detect OS for Tesseract Path
+if os.name == 'nt':  # Windows (Local)
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+else:  # Linux (Cloud / Docker)
+    pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
 
 # Load the custom model for OCR, Helmet, and Signal Jump
 MODEL_PATH = os.path.join(os.getcwd(), "CivicEye_v1.pt")
