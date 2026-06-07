@@ -4,47 +4,88 @@ from ultralytics import YOLO
 import os
 
 # HARDCODED PATH: Direct link to the executable
-# Using 'r' before the string handles the backslashes correctly in Windows
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# Load the model (Update this path if your model is elsewhere)
-# Using a relative path is usually safer for local projects
-# We use the exact name from your screenshot
+# Load the custom model for OCR, Helmet, and Signal Jump
 MODEL_PATH = os.path.join(os.getcwd(), "CivicEye_v1.pt")
-model = YOLO(MODEL_PATH)
+model_custom = YOLO(MODEL_PATH)
+
+# Load the standard YOLOv8 model for counting persons (will download automatically on first run)
+model_std = YOLO("yolov8n.pt")
 
 class AIEngine:
     @staticmethod
+    def is_overlapping(box1, box2):
+        """Check if two bounding boxes [x1, y1, x2, y2] overlap."""
+        x1_1, y1_1, x2_1, y2_1 = box1
+        x1_2, y1_2, x2_2, y2_2 = box2
+        
+        # If one rectangle is on left side of other
+        if x1_1 > x2_2 or x1_2 > x2_1:
+            return False
+        # If one rectangle is above other
+        if y1_1 > y2_2 or y1_2 > y2_1:
+            return False
+        return True
+
+    @staticmethod
     def process_image(image_path: str):
-        """
-        Analyzes an image for traffic violations and extracts the number plate.
-        """
         img = cv2.imread(image_path)
         if img is None:
             return "Clear", "NOT_FOUND"
 
-        # Run detection
-        results = model(image_path, conf=0.10, iou=0.3)
-        detected_violation = "Clear"
+        detected_violations = set()
         plate_text = "NOT_FOUND"
 
-        for r in results:
+        # ==========================================
+        # 1. Standard YOLOv8 for Triple Riding
+        # ==========================================
+        # Standard model accurately separates 'person' (0) and 'motorcycle' (3)
+        results_std = model_std(image_path, conf=0.25)
+        persons = []
+        motorcycles = []
+        
+        for r in results_std:
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                coords = box.xyxy[0].tolist()
+                if cls_id == 0: # person
+                    persons.append(coords)
+                elif cls_id == 3: # motorcycle
+                    motorcycles.append(coords)
+        
+        # Count persons whose bounding boxes overlap with the motorcycle
+        for moto_box in motorcycles:
+            associated_persons = 0
+            for person_box in persons:
+                if AIEngine.is_overlapping(moto_box, person_box):
+                    associated_persons += 1
+            
+            if associated_persons >= 3:
+                detected_violations.add("Triple Riding")
+                break # Found at least one motorcycle with 3+ people
+
+        # ==========================================
+        # 2. Custom Model for No Helmet & OCR
+        # ==========================================
+        results_custom = model_custom(image_path, conf=0.10, iou=0.3)
+
+        for r in results_custom:
             classes = r.boxes.cls.tolist()
             
-            # 1. Violation Logic
-            if classes.count(7) >= 3:
-                detected_violation = "Triple Riding"
-            elif 3 in classes:
-                detected_violation = "No Helmet"
-            elif 7 in classes and 1 not in classes:
-                detected_violation = "No Helmet"
-            elif 6 in classes and 7 in classes:
-                detected_violation = "Signal Jump"
+            # Restore the original logic that successfully triggered No Helmet
+            # (In the custom model, detecting a Rider (3) triggered No Helmet)
+            if 3 in classes or (7 in classes and 1 not in classes) or 2 in classes:
+                detected_violations.add("No Helmet")
+                
+            if 6 in classes and 7 in classes:
+                detected_violations.add("Signal Jump")
 
-            # 2. OCR Logic for License Plates
+            # OCR Logic for License Plates
+            # The custom model classes for plates are 1 (LP) and 5 (number_plate)
             for box in r.boxes:
                 class_id = int(box.cls[0])
-                if class_id in [2, 4]: # LP or number_plate
+                if class_id in [1, 5]: 
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     
                     h, w, _ = img.shape
@@ -53,16 +94,21 @@ class AIEngine:
                     
                     if crop.size > 0:
                         try:
-                            # Pre-process for Tesseract
                             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
                             gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
                             
                             config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
                             raw_text = pytesseract.image_to_string(gray, config=config)
-                            plate_text = raw_text.strip().replace(" ", "")
+                            current_text = raw_text.strip().replace(" ", "")
+                            if current_text:
+                                plate_text = current_text
                         except Exception as ocr_error:
-                            # If OCR fails, we don't want the whole backend to crash
                             print(f"⚠️ OCR Error: {ocr_error}")
-                            plate_text = "ERROR_READING"
+                            if plate_text == "NOT_FOUND":
+                                plate_text = "ERROR_READING"
 
-        return detected_violation, plate_text
+        # Ensure consistent string creation
+        final_violations = sorted(list(detected_violations))
+        final_violation_string = ", ".join(final_violations) if final_violations else "Clear"
+
+        return final_violation_string, plate_text
